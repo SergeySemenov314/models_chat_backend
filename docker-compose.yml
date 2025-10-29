@@ -1,0 +1,34 @@
+services:
+  mongodb:
+    image: mongo:latest
+    container_name: mongodb
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    networks:
+      - ollama-net
+
+  backend:
+    build: .
+    container_name: backend
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=production
+    env_file:
+      - .env
+    command: ["npm", "run", "start:prod"]
+    depends_on:
+      - mongodb
+    networks:
+      - ollama-net
+
+volumes:
+  mongodb_data:
+
+networks:
+  ollama-net:
+    driver: bridge
+
+

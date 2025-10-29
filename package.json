@@ -1,0 +1,39 @@
+{
+  "name": "template-backend",
+  "version": "1.0.0",
+  "main": "dist/main.js",
+  "description": "Backend для универсального шаблона проекта на NestJS",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/main.js",
+    "start:dev": "nodemon src/main.ts",
+    "start:debug": "nodemon --config nodemon-debug.json src/main.ts",
+    "prestart:prod": "npm run build",
+    "start:prod": "node dist/main.js"
+  },
+  "keywords": ["nestjs", "template", "api", "mongodb"],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@nestjs/common": "^11.0.0",
+    "@nestjs/config": "^4.0.0",
+    "@nestjs/core": "^11.0.0",
+    "@nestjs/mongoose": "^11.0.0",
+    "@nestjs/platform-express": "^11.0.0",
+    "@google/generative-ai": "^0.21.0",
+    "axios": "^1.7.0",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.14.0",
+    "cors": "^2.8.5",
+    "mongoose": "^8.0.0",
+    "reflect-metadata": "^0.2.0",
+    "rxjs": "^7.2.0"
+  },
+  "devDependencies": {
+    "@nestjs/cli": "^11.0.0",
+    "@types/node": "^22.0.0",
+    "nodemon": "^3.0.0",
+    "ts-node": "^10.0.0",
+    "typescript": "^5.0.0"
+  }
+}
