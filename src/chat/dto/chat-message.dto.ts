@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsOptional, IsArray, ValidateNested, IsEnum } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsArray, ValidateNested, IsEnum, IsBoolean } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class MessageDto {
@@ -28,6 +28,10 @@ export class ChatRequestDto {
   @IsOptional()
   @IsString()
   systemPrompt?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  useRag?: boolean;
 }
 
 export class ChatResponseDto {
@@ -41,6 +45,12 @@ export class ChatResponseDto {
     responseTokens?: number;
     totalTokens?: number;
   };
+
+  @IsOptional()
+  sources?: Array<{
+    document: string;
+    similarity: number;
+  }>;
 }
 
 export class ModelsListDto {

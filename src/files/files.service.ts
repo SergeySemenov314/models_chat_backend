@@ -1,14 +1,18 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { FileDocument } from './file.schema';
+import { RagService } from '../rag/services/rag.service';
 import * as fs from 'fs';
 import * as path from 'path';
 
 @Injectable()
 export class FilesService {
+  private readonly logger = new Logger(FilesService.name);
+
   constructor(
-    @InjectModel(FileDocument.name) private fileModel: Model<FileDocument>
+    @InjectModel(FileDocument.name) private fileModel: Model<FileDocument>,
+    private readonly ragService: RagService,
   ) {}
 
   async uploadFile(file: Express.Multer.File): Promise<FileDocument> {
@@ -20,7 +24,44 @@ export class FilesService {
       path: file.path,
     });
 
-    return fileDoc.save();
+    const savedFile = await fileDoc.save();
+
+    // Индексируем файл для RAG (асинхронно, не блокируем ответ)
+    this.indexFileForRag(savedFile).catch(error => {
+      this.logger.error(`Failed to index file ${savedFile._id} for RAG:`, error);
+    });
+
+    return savedFile;
+  }
+
+  /**
+   * Индексирует файл для RAG
+   */
+  private async indexFileForRag(file: FileDocument): Promise<void> {
+    try {
+      // Проверяем, поддерживается ли тип файла для RAG
+      const supportedTypes = [
+        'application/pdf',
+        'text/plain',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'application/msword',
+      ];
+
+      if (!supportedTypes.includes(file.mimetype)) {
+        this.logger.log(`File type ${file.mimetype} not supported for RAG indexing, skipping`);
+        return;
+      }
+
+      await this.ragService.indexFile(
+        file._id.toString(),
+        file.path,
+        file.mimetype,
+        file.originalName
+      );
+    } catch (error) {
+      this.logger.error(`Error indexing file ${file._id}:`, error);
+      // Не бросаем ошибку, чтобы не помешать загрузке файла
+    }
   }
 
   async getAllFiles(): Promise<FileDocument[]> {
@@ -38,13 +79,21 @@ export class FilesService {
   async deleteFile(id: string): Promise<void> {
     const file = await this.getFileById(id);
     
+    // Удаляем индекс из RAG (если существует)
+    try {
+      await this.ragService.deleteFileIndex(id);
+    } catch (error) {
+      this.logger.error(`Error deleting RAG index for file ${id}:`, error);
+      // Продолжаем удаление файла даже если удаление индекса не удалось
+    }
+    
     // Удаляем физический файл
     try {
       if (fs.existsSync(file.path)) {
         fs.unlinkSync(file.path);
       }
     } catch (error) {
-      console.error('Ошибка удаления физического файла:', error);
+      this.logger.error('Ошибка удаления физического файла:', error);
     }
 
     // Удаляем запись из базы данных

@@ -11,22 +11,31 @@
     "prestart:prod": "npm run build",
     "start:prod": "node dist/main.js"
   },
-  "keywords": ["nestjs", "template", "api", "mongodb"],
+  "keywords": [
+    "nestjs",
+    "template",
+    "api",
+    "mongodb"
+  ],
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@chroma-core/default-embed": "^0.1.8",
+    "@google/generative-ai": "^0.21.0",
     "@nestjs/common": "^11.0.0",
     "@nestjs/config": "^4.0.0",
     "@nestjs/core": "^11.0.0",
     "@nestjs/mongoose": "^11.0.0",
     "@nestjs/platform-express": "^11.0.0",
-    "@google/generative-ai": "^0.21.0",
     "axios": "^1.7.0",
+    "chromadb": "^3.1.0",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.0",
     "cors": "^2.8.5",
+    "mammoth": "^1.11.0",
     "mongoose": "^8.0.0",
     "multer": "^1.4.5-lts.1",
+    "pdf-parse": "^2.4.5",
     "reflect-metadata": "^0.2.0",
     "rxjs": "^7.2.0"
   },

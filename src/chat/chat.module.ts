@@ -4,9 +4,10 @@ import { ChatController } from './chat.controller';
 import { ChatService } from './chat.service';
 import { GeminiService } from './services/gemini.service';
 import { CustomService } from './services/custom.service';
+import { RagModule } from '../rag/rag.module';
 
 @Module({
-  imports: [ConfigModule],
+  imports: [ConfigModule, RagModule],
   controllers: [ChatController],
   providers: [ChatService, GeminiService, CustomService],
   exports: [ChatService],

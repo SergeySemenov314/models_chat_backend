@@ -4,6 +4,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { UsersModule } from './users/users.module';
 import { ChatModule } from './chat/chat.module';
 import { FilesModule } from './files/files.module';
+import { RagModule } from './rag/rag.module';
 
 @Module({
   imports: [
@@ -13,13 +14,14 @@ import { FilesModule } from './files/files.module';
     MongooseModule.forRootAsync({
       imports: [ConfigModule],
       useFactory: async (configService: ConfigService) => ({
-        uri: configService.get<string>('MONGODB_URI') || 'mongodb://localhost:27017/app',
+        uri: 'mongodb://localhost:27017/app',
       }),
       inject: [ConfigService],
     }),
     UsersModule,
     ChatModule,
     FilesModule,
+    RagModule,
   ],
 })
 export class AppModule {} 
