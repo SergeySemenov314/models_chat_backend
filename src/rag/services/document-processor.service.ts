@@ -1,7 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import * as fs from 'fs';
 import * as path from 'path';
-const pdfParse = require('pdf-parse');
 import * as mammoth from 'mammoth';
 
 export interface DocumentChunk {
@@ -53,9 +52,18 @@ export class DocumentProcessorService {
    * Извлекает текст из PDF файла
    */
   private async extractTextFromPDF(filePath: string): Promise<string> {
-    const dataBuffer = fs.readFileSync(filePath);
-    const data = await pdfParse(dataBuffer);
-    return data.text;
+    try {
+      // Динамический импорт для избежания проблем с загрузкой модуля при старте приложения
+      // Используем require динамически, чтобы модуль загружался только при необходимости
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const pdfParse = require('pdf-parse');
+      const dataBuffer = fs.readFileSync(filePath);
+      const data = await pdfParse(dataBuffer);
+      return data.text;
+    } catch (error) {
+      this.logger.error(`Error parsing PDF file ${filePath}:`, error);
+      throw new Error(`Failed to extract text from PDF: ${error.message}`);
+    }
   }
 
   /**
