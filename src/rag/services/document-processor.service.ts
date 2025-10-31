@@ -72,7 +72,7 @@ export class DocumentProcessorService {
   private async extractTextFromDOCX(filePath: string): Promise<string> {
     const dataBuffer = fs.readFileSync(filePath);
     const result = await mammoth.extractRawText({ buffer: dataBuffer });
-    return result.value;
+    return result.value; 
   }
 
   /**
