@@ -1,8 +1,6 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ChromaClient } from 'chromadb';
-import * as path from 'path';
-import * as fs from 'fs';
 
 export interface DocumentMetadata {
   fileId: string;
@@ -19,11 +17,8 @@ export class VectorStoreService implements OnModuleInit {
   private client: ChromaClient;
   private collection: any;
   private readonly collectionName = 'documents';
-  private readonly vectorDbPath: string;
 
-  constructor(private configService: ConfigService) {
-    this.vectorDbPath = this.configService.get<string>('VECTOR_DB_PATH') || path.resolve(process.cwd(), 'vector_db');
-  }
+  constructor(private configService: ConfigService) {}
 
   async onModuleInit() {
     await this.initialize();
@@ -34,30 +29,37 @@ export class VectorStoreService implements OnModuleInit {
    */
   private async initialize() {
     try {
-      // Создаем директорию если её нет
-      if (!fs.existsSync(this.vectorDbPath)) {
-        fs.mkdirSync(this.vectorDbPath, { recursive: true });
-      }
+      // Получаем настройки подключения к ChromaDB из переменных окружения
+      const chromaUrl = this.configService.get<string>('CHROMADB_URL');
+      const chromaHost = this.configService.get<string>('CHROMADB_HOST', 'localhost');
+      const chromaPort = this.configService.get<number>('CHROMADB_PORT', 8000);
 
-      // Инициализируем ChromaDB клиент
-      // ChromaDB может работать в режиме in-memory или с персистентным хранилищем
-      // Для локального хранилища используем path, для сервера - host и port
-      const chromaConfig: any = {};
-      
-      // Проверяем, указан ли путь к серверу ChromaDB
-      const chromaHost = this.configService.get<string>('CHROMA_HOST');
-      const chromaPort = this.configService.get<string>('CHROMA_PORT');
-      
-      if (chromaHost && chromaHost.trim() !== '') {
-        // Используем удаленный сервер ChromaDB (новый формат API)
-        chromaConfig.host = chromaHost;
-        chromaConfig.port = chromaPort ? parseInt(chromaPort, 10) : 8000;
+      // Парсим URL если указан, иначе используем host и port напрямую
+      if (chromaUrl) {
+        try {
+          const url = new URL(chromaUrl);
+          const host = url.hostname;
+          const port = parseInt(url.port) || (url.protocol === 'https:' ? 443 : 80);
+          this.logger.log(`Initializing ChromaDB with remote server at: http://${host}:${port}`);
+          this.client = new ChromaClient({
+            host: host,
+            port: port,
+          } as any);
+        } catch (error) {
+          this.logger.warn(`Failed to parse CHROMADB_URL, using host and port instead`);
+          this.logger.log(`Initializing ChromaDB with remote server at: http://${chromaHost}:${chromaPort}`);
+          this.client = new ChromaClient({
+            host: chromaHost,
+            port: chromaPort,
+          } as any);
+        }
       } else {
-        // Используем локальное хранилище
-        chromaConfig.path = this.vectorDbPath;
+        this.logger.log(`Initializing ChromaDB with remote server at: http://${chromaHost}:${chromaPort}`);
+        this.client = new ChromaClient({
+          host: chromaHost,
+          port: chromaPort,
+        } as any);
       }
-
-      this.client = new ChromaClient(chromaConfig);
 
       // Проверяем, существует ли коллекция
       try {

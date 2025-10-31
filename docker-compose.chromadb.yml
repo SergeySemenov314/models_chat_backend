@@ -1,0 +1,32 @@
+services:
+  chromadb:
+    build:
+      context: .
+      dockerfile: Dockerfile.chromadb
+    container_name: chromadb-server
+    ports:
+      - "8000:8000"
+    volumes:
+      - chromadb_data:/chroma/data
+    environment:
+      - CHROMA_HOST=0.0.0.0
+      - CHROMA_PORT=8000
+      - CHROMA_DATA_PATH=/chroma/data
+    restart: unless-stopped
+    networks:
+      - ollama-net
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8000/api/v1/heartbeat\")' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  chromadb_data:
+    driver: local
+
+networks:
+  ollama-net:
+    external: true
+

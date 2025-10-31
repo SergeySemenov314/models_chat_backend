@@ -1,0 +1,29 @@
+FROM python:3.11-slim
+
+# Установка системных зависимостей
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    git \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Создание рабочей директории
+WORKDIR /chroma
+
+# Установка ChromaDB (используем последнюю доступную версию)
+# Для запуска сервера используем Python пакет chromadb
+RUN pip install --no-cache-dir chromadb
+
+# Создание директории для данных
+RUN mkdir -p /chroma/data
+
+# Открытие порта
+EXPOSE 8000
+
+# Переменные окружения
+ENV CHROMA_HOST=0.0.0.0
+ENV CHROMA_PORT=8000
+ENV CHROMA_DATA_PATH=/chroma/data
+
+# Запуск ChromaDB сервера
+CMD ["chroma", "run", "--host", "0.0.0.0", "--port", "8000", "--path", "/chroma/data"]
