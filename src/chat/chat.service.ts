@@ -41,9 +41,18 @@ export class ChatService {
             enhancedSystemPrompt = (enhancedSystemPrompt ? enhancedSystemPrompt + '\n\n' : '') + documentsContext;
             
             // Сохраняем источники для ответа
-            sources = searchResults.map(result => ({
-              document: result.metadata.originalName,
-              similarity: result.similarity,
+            // Группируем по документу и берем максимальную релевантность
+            const sourcesMap = new Map<string, number>();
+            for (const result of searchResults) {
+              const docName = result.metadata.originalName;
+              const currentSimilarity = sourcesMap.get(docName) || 0;
+              if (result.similarity > currentSimilarity) {
+                sourcesMap.set(docName, result.similarity);
+              }
+            }
+            sources = Array.from(sourcesMap.entries()).map(([document, similarity]) => ({
+              document,
+              similarity,
             }));
 
             this.logger.log(`RAG: Found ${searchResults.length} relevant documents, added to prompt`);
