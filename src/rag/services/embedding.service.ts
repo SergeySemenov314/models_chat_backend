@@ -9,9 +9,13 @@ export class EmbeddingService {
   private readonly provider: string;
   private readonly geminiAI: GoogleGenerativeAI | null;
   private readonly openaiApiKey: string | null;
+  private readonly huggingFaceApiKey: string | null;
+  private readonly huggingFaceModel: string;
 
   constructor(private configService: ConfigService) {
     this.provider = this.configService.get<string>('EMBEDDING_PROVIDER') || 'gemini';
+    this.huggingFaceApiKey = null;
+    this.huggingFaceModel = 'sentence-transformers/all-MiniLM-L6-v2';
     
     if (this.provider === 'gemini') {
       const apiKey = this.configService.get<string>('GEMINI_API_KEY');
@@ -26,6 +30,16 @@ export class EmbeddingService {
       if (!this.openaiApiKey) {
         this.logger.warn('OPENAI_API_KEY not found');
       }
+    } else if (this.provider === 'huggingface') {
+      this.huggingFaceApiKey = this.configService.get<string>('HUGGINGFACE_API_KEY') || null;
+      // Используем модель, которая точно поддерживает feature extraction через Inference API
+      this.huggingFaceModel = this.configService.get<string>('HUGGINGFACE_EMBEDDING_MODEL') || 
+                              'BAAI/bge-small-en-v1.5';
+      if (!this.huggingFaceApiKey) {
+        this.logger.error('HUGGINGFACE_API_KEY is required for Hugging Face embeddings. Please set it in your .env file.');
+      } else {
+        this.logger.log(`Hugging Face embeddings configured with API key and model: ${this.huggingFaceModel}`);
+      }
     }
   }
 
@@ -39,6 +53,8 @@ export class EmbeddingService {
         return await this.generateGeminiEmbedding(text);
       } else if (this.provider === 'openai') {
         return await this.generateOpenAIEmbedding(text);
+      } else if (this.provider === 'huggingface') {
+        return await this.generateHuggingFaceEmbedding(text);
       } else {
         throw new Error(`Unsupported embedding provider: ${this.provider}`);
       }
@@ -54,6 +70,7 @@ export class EmbeddingService {
    */
   async generateEmbeddings(texts: string[]): Promise<number[][]> {
     try {
+      this.logger.log(`EmbeddingService: Generating ${texts.length} embeddings using provider: ${this.provider}`);
       if (this.provider === 'gemini') {
         // Gemini может обрабатывать батчами через API
         const embeddings: number[][] = [];
@@ -65,6 +82,10 @@ export class EmbeddingService {
       } else if (this.provider === 'openai') {
         // OpenAI поддерживает батчи
         return await this.generateOpenAIEmbeddings(texts);
+      } else if (this.provider === 'huggingface') {
+        // Hugging Face поддерживает батчи
+        this.logger.log(`Using Hugging Face API with model: ${this.huggingFaceModel}`);
+        return await this.generateHuggingFaceEmbeddings(texts);
       } else {
         throw new Error(`Unsupported embedding provider: ${this.provider}`);
       }
@@ -188,6 +209,168 @@ export class EmbeddingService {
       return embeddings;
     } catch (error) {
       this.logger.error('OpenAI embeddings error:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Генерирует эмбеддинг через Hugging Face Inference API
+   */
+  private async generateHuggingFaceEmbedding(text: string): Promise<number[]> {
+    if (!this.huggingFaceApiKey) {
+      throw new Error('HUGGINGFACE_API_KEY is required for Hugging Face embeddings');
+    }
+
+    try {
+      this.logger.log(`Calling Hugging Face API: ${this.huggingFaceModel} for single text`);
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${this.huggingFaceApiKey}`,
+      };
+
+      // Используем models endpoint для embeddings
+      // Для некоторых моделей нужно использовать другой формат
+      const requestBody = this.huggingFaceModel.includes('sentence-transformers') 
+        ? { inputs: [text] }  // sentence-transformers ожидает массив
+        : { inputs: text };    // другие модели ожидают строку
+
+      const apiUrl = `https://router.huggingface.co/hf-inference/models/${this.huggingFaceModel}`;
+      const response = await axios.post(
+        apiUrl,
+        requestBody,
+        {
+          headers,
+          timeout: 30000, // 30 секунд таймаут
+        }
+      );
+
+      this.logger.log(`Hugging Face API response received successfully`);
+
+      // Hugging Face возвращает массив чисел или массив массивов
+      let embedding: number[];
+      if (Array.isArray(response.data)) {
+        // Если это массив массивов, берем первый элемент
+        if (Array.isArray(response.data[0])) {
+          embedding = response.data[0];
+        } else {
+          embedding = response.data;
+        }
+      } else {
+        throw new Error('Invalid embedding response from Hugging Face');
+      }
+
+      if (!embedding || !Array.isArray(embedding) || embedding.length === 0) {
+        throw new Error('Invalid embedding response from Hugging Face');
+      }
+
+      return embedding;
+    } catch (error) {
+      if (axios.isAxiosError(error)) {
+        if (error.response?.status === 503) {
+          // Модель загружается, нужно подождать
+          this.logger.warn('Hugging Face model is loading, waiting 10 seconds...');
+          await new Promise(resolve => setTimeout(resolve, 10000));
+          // Повторная попытка
+          return this.generateHuggingFaceEmbedding(text);
+        }
+        if (error.response?.status === 410) {
+          // Старый endpoint больше не поддерживается
+          this.logger.error('Hugging Face API endpoint is deprecated. Please check the API documentation.');
+        }
+        if (error.response?.status === 401) {
+          // Требуется авторизация
+          this.logger.error('Hugging Face API requires authentication. Please set HUGGINGFACE_API_KEY in your .env file.');
+        }
+        this.logger.error(`Hugging Face API error: ${error.response?.status} - ${error.response?.statusText}`);
+        if (error.response?.data) {
+          this.logger.error(`Error details: ${JSON.stringify(error.response.data)}`);
+        }
+      } else {
+        this.logger.error('Hugging Face embedding error:', error);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Генерирует эмбеддинги для массива текстов через Hugging Face (батчинг)
+   */
+  private async generateHuggingFaceEmbeddings(texts: string[]): Promise<number[][]> {
+    if (!this.huggingFaceApiKey) {
+      throw new Error('HUGGINGFACE_API_KEY is required for Hugging Face embeddings');
+    }
+
+    try {
+      this.logger.log(`Calling Hugging Face API: ${this.huggingFaceModel} for ${texts.length} texts`);
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${this.huggingFaceApiKey}`,
+      };
+
+      // Используем models endpoint для embeddings
+      // Для sentence-transformers уже ожидается массив, для других моделей тоже
+      const apiUrl = `https://router.huggingface.co/hf-inference/models/${this.huggingFaceModel}`;
+      const response = await axios.post(
+        apiUrl,
+        {
+          inputs: texts,
+        },
+        {
+          headers,
+          timeout: 60000, // 60 секунд таймаут для батча
+        }
+      );
+
+      this.logger.log(`Hugging Face API response received successfully for ${texts.length} texts`);
+
+      // Hugging Face возвращает массив массивов для батча
+      let embeddings: number[][];
+      if (Array.isArray(response.data)) {
+        if (Array.isArray(response.data[0])) {
+          embeddings = response.data;
+        } else {
+          // Если вернулся один массив, оборачиваем в массив
+          embeddings = [response.data];
+        }
+      } else {
+        throw new Error('Invalid embeddings response from Hugging Face');
+      }
+
+      if (!embeddings || !Array.isArray(embeddings) || embeddings.length === 0) {
+        throw new Error('Invalid embeddings response from Hugging Face');
+      }
+
+      if (embeddings.length !== texts.length) {
+        this.logger.warn(
+          `Mismatch: requested ${texts.length} embeddings, got ${embeddings.length}`
+        );
+      }
+
+      return embeddings;
+    } catch (error) {
+      if (axios.isAxiosError(error)) {
+        if (error.response?.status === 503) {
+          // Модель загружается, нужно подождать
+          this.logger.warn('Hugging Face model is loading, waiting 10 seconds...');
+          await new Promise(resolve => setTimeout(resolve, 10000));
+          // Повторная попытка
+          return this.generateHuggingFaceEmbeddings(texts);
+        }
+        if (error.response?.status === 410) {
+          // Старый endpoint больше не поддерживается
+          this.logger.error('Hugging Face API endpoint is deprecated. Please check the API documentation.');
+        }
+        if (error.response?.status === 401) {
+          // Требуется авторизация
+          this.logger.error('Hugging Face API requires authentication. Please set HUGGINGFACE_API_KEY in your .env file.');
+        }
+        this.logger.error(`Hugging Face API error: ${error.response?.status} - ${error.response?.statusText}`);
+        if (error.response?.data) {
+          this.logger.error(`Error details: ${JSON.stringify(error.response.data)}`);
+        }
+      } else {
+        this.logger.error('Hugging Face embeddings error:', error);
+      }
       throw error;
     }
   }
