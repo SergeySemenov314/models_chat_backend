@@ -31,6 +31,7 @@ export class VectorStoreService implements OnModuleInit {
     try {
       // Получаем настройки подключения к ChromaDB из переменных окружения
       const chromaUrl = this.configService.get<string>('CHROMADB_URL');
+      // По умолчанию localhost для локальной разработки, в Docker переопределяется через env
       const chromaHost = this.configService.get<string>('CHROMADB_HOST', 'localhost');
       const chromaPort = this.configService.get<number>('CHROMADB_PORT', 8000);
 
