@@ -7,7 +7,13 @@ async function bootstrap() {
   
   // Включаем CORS для фронтенда
   app.enableCors({
-    origin: ['http://localhost:3000', 'http://localhost:80', 'http://localhost'],
+    origin: [
+      'http://localhost:3000', 
+      'http://localhost:80', 
+      'http://localhost',
+      'https://5phm.l.time4vps.cloud',
+      'http://5phm.l.time4vps.cloud'
+    ],
     credentials: true,
   });
   
