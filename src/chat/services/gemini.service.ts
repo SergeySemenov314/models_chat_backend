@@ -15,6 +15,55 @@ export class GeminiService {
     this.genAI = new GoogleGenerativeAI(apiKey);
   }
 
+  private toFlatName(name: string): string {
+    if (!name) return name;
+    return name.includes('/') ? name.split('/').pop() as string : name;
+  }
+
+  private buildFallbackOrder(preferred: string, available: string[]): string[] {
+    const preferredOrder = [
+      'gemini-2.5-flash',
+      'gemini-2.0-flash',
+      'gemini-2.0-flash-lite'
+    ];
+
+    const flatAvailable = (available || []).map(n => this.toFlatName(n));
+
+    const ordered = [
+      this.toFlatName(preferred),
+      ...preferredOrder,
+      ...flatAvailable
+    ];
+
+    // uniq while preserving order
+    const seen = new Set<string>();
+    return ordered.filter(n => {
+      if (!n) return false;
+      if (seen.has(n)) return false;
+      seen.add(n);
+      return true;
+    });
+  }
+
+  private isRetriableError(err: unknown): boolean {
+    const msg = String((err as any)?.message || err || '').toLowerCase();
+    // Common Gemini/HTTP transient or capacity errors
+    return (
+      msg.includes('429') ||
+      msg.includes('too many requests') ||
+      msg.includes('resource exhausted') ||
+      msg.includes('rate') ||
+      msg.includes('quota') ||
+      msg.includes('unavailable') ||
+      msg.includes('overloaded') ||
+      msg.includes('timeout') ||
+      msg.includes('timed out') ||
+      msg.includes('502') ||
+      msg.includes('503') ||
+      msg.includes('504')
+    );
+  }
+
   async getAvailableModels(): Promise<string[]> {
     try {
       const apiKey = this.configService.get<string>('GEMINI_API_KEY');
@@ -64,27 +113,15 @@ export class GeminiService {
     systemPrompt?: string
   ): Promise<ChatResponseDto> {
     try {
-      // Получаем список доступных моделей для проверки
+      // Получаем список доступных моделей и строим порядок попыток
       const availableModels = await this.getAvailableModels();
-      let modelNameToUse = model;
+      const candidates = this.buildFallbackOrder(model, availableModels);
 
-      // Проверяем доступность модели
-      if (availableModels.length > 0) {
-        const flatNames = availableModels.map(n => n.includes('/') ? n.split('/').pop() : n);
-        if (!flatNames.includes(modelNameToUse)) {
-          modelNameToUse = this.pickBestModel(availableModels);
-        }
-      }
-
-      let genModel = this.genAI.getGenerativeModel({ model: modelNameToUse });
-
-      // Подготавливаем промпт
+      // Готовим промпт один раз
       let prompt = '';
       if (systemPrompt && systemPrompt.trim()) {
         prompt += `Системная инструкция: ${systemPrompt}\n\n`;
       }
-
-      // Добавляем историю сообщений (последние 10)
       const recentMessages = messages.slice(-10).filter(msg => msg.role !== 'error');
       recentMessages.forEach(msg => {
         const roleLabel = msg.role === 'assistant' ? 'AI' : 'Пользователь';
@@ -92,39 +129,37 @@ export class GeminiService {
       });
       prompt += `AI: `;
 
-      let result;
-      try {
-        result = await genModel.generateContent(prompt);
-      } catch (err) {
-        // Если модель не найдена, пробуем fallback
-        const isNotFound = (err && (String(err.message || err).includes('404') || 
-                                   String(err.message || err).includes('not found')));
-        if (isNotFound && availableModels.length > 0) {
-          const fallback = this.pickBestModel(availableModels);
-          if (fallback && fallback !== modelNameToUse) {
-            modelNameToUse = fallback;
-            genModel = this.genAI.getGenerativeModel({ model: modelNameToUse });
-            result = await genModel.generateContent(prompt);
-          } else {
-            throw err;
+      let lastError: any = null;
+      for (const candidate of candidates) {
+        try {
+          const genModel = this.genAI.getGenerativeModel({ model: candidate });
+          const result = await genModel.generateContent(prompt);
+          const response = await result.response;
+          const text = response.text();
+
+          return {
+            content: text,
+            stats: {
+              model: candidate,
+              promptTokens: response.usageMetadata?.promptTokenCount || 0,
+              responseTokens: response.usageMetadata?.candidatesTokenCount || 0,
+              totalTokens: response.usageMetadata?.totalTokenCount || 0
+            }
+          };
+        } catch (err) {
+          lastError = err;
+          const msg = String((err as any)?.message || err || '');
+          // Если ошибка не ретраибл и не 404/unknown model — прерываем цикл
+          const isNotFound = msg.includes('404') || msg.toLowerCase().includes('not found');
+          if (!(isNotFound || this.isRetriableError(err))) {
+            break;
           }
-        } else {
-          throw err;
+          // иначе идем к следующей модели
+          continue;
         }
       }
 
-      const response = await result.response;
-      const text = response.text();
-
-      return {
-        content: text,
-        stats: {
-          model: modelNameToUse,
-          promptTokens: response.usageMetadata?.promptTokenCount || 0,
-          responseTokens: response.usageMetadata?.candidatesTokenCount || 0,
-          totalTokens: response.usageMetadata?.totalTokenCount || 0
-        }
-      };
+      throw lastError || new Error('All models failed without specific error');
     } catch (error) {
       console.error('Gemini API error:', error);
       throw new InternalServerErrorException(`Ошибка Gemini API: ${error.message}`);
