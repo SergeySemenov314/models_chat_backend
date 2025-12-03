@@ -9,6 +9,29 @@ services:
     networks:
       - ollama-net
 
+  chromadb:
+    build:
+      context: .
+      dockerfile: Dockerfile.chromadb
+    container_name: chromadb-server
+    ports:
+      - "8000:8000"
+    volumes:
+      - chromadb_data:/chroma/data
+    environment:
+      - CHROMA_HOST=0.0.0.0
+      - CHROMA_PORT=8000
+      - CHROMA_DATA_PATH=/chroma/data
+    restart: unless-stopped
+    networks:
+      - ollama-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s -o /dev/null -w '%{http_code}' http://localhost:8000/ | grep -q '200\\|404\\|405' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
   backend:
     build: .
     container_name: backend
@@ -22,12 +45,17 @@ services:
       - .env
     command: ["npm", "run", "start:prod"]
     depends_on:
-      - mongodb
+      mongodb:
+        condition: service_started
+      chromadb:
+        condition: service_healthy
     networks:
       - ollama-net
 
 volumes:
   mongodb_data:
+  chromadb_data:
+    driver: local
 
 networks:
   ollama-net:
