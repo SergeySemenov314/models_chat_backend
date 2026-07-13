@@ -98,6 +98,18 @@ export class GeminiService {
     return `${status ?? ''} ${err?.message ?? ''} ${dataStr}`.trim();
   }
 
+  // Модели, поддерживающие generateContent, но не отдающие текстовый ответ
+  // (TTS, генерация изображений, embedding и т.п.) — их нужно исключать из
+  // списка кандидатов для обычного текстового чата.
+  private isTextChatModel(name: string): boolean {
+    const flat = this.toFlatName(name).toLowerCase();
+    const nonTextMarkers = [
+      'tts', 'image', 'embedding', 'robotics', 'computer-use',
+      'lyria', 'banana', 'omni', 'deep-research', 'antigravity', 'aqa'
+    ];
+    return !nonTextMarkers.some(marker => flat.includes(marker));
+  }
+
   async getAvailableModels(): Promise<string[]> {
     const defaults = ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.0-flash'];
     try {
@@ -109,7 +121,8 @@ export class GeminiService {
       const models = (resp.data?.models || [])
         .filter(m => Array.isArray(m.supportedGenerationMethods) &&
                     m.supportedGenerationMethods.includes('generateContent'))
-        .map(m => m.name);
+        .map(m => m.name)
+        .filter(name => this.isTextChatModel(name));
 
       if (models.length === 0) {
         console.warn('ListModels returned an empty generateContent list, using defaults');
