@@ -94,7 +94,7 @@ export class ChatService {
     } catch (error) {
       this.logger.error('Error getting available models:', error);
       // Возвращаем дефолтные модели в случае ошибки
-      return ['gemini-2.5-flash', 'gemini-2.0-flash'];
+      return ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.0-flash'];
     }
   }
 }

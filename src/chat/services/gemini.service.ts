@@ -1,18 +1,38 @@
-import { Injectable, BadRequestException, InternalServerErrorException } from '@nestjs/common';
+import { Injectable, InternalServerErrorException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import axios, { AxiosInstance } from 'axios';
+import { HttpsProxyAgent } from 'https-proxy-agent';
 import { MessageDto, ChatResponseDto } from '../dto/chat-message.dto';
 
 @Injectable()
 export class GeminiService {
-  private genAI: GoogleGenerativeAI;
+  private readonly apiKey: string;
+  private readonly baseUrl = 'https://generativelanguage.googleapis.com/v1beta';
+  private readonly http: AxiosInstance;
 
   constructor(private configService: ConfigService) {
     const apiKey = this.configService.get<string>('GEMINI_API_KEY');
     if (!apiKey) {
       throw new Error('GEMINI_API_KEY is not configured');
     }
-    this.genAI = new GoogleGenerativeAI(apiKey);
+    this.apiKey = apiKey;
+
+    // Если задан GEMINI_PROXY_URL — все вызовы к Google идут через прокси
+    // (нужно, когда сервер в регионе, где Google блокирует Gemini, напр. EEA).
+    // Через прокси идут ТОЛЬКО запросы этого клиента — ChromaDB/HuggingFace не затрагиваются.
+    const proxyUrl = this.configService.get<string>('GEMINI_PROXY_URL');
+    const axiosConfig: any = { timeout: 60000 };
+    if (proxyUrl && proxyUrl.trim()) {
+      const url = proxyUrl.trim();
+      axiosConfig.httpsAgent = new HttpsProxyAgent(url);
+      axiosConfig.proxy = false; // отключаем встроенный proxy axios, используем agent
+      try {
+        console.log(`Gemini: outbound requests routed via proxy ${new URL(url).host}`);
+      } catch {
+        console.log('Gemini: outbound requests routed via proxy');
+      }
+    }
+    this.http = axios.create(axiosConfig);
   }
 
   private toFlatName(name: string): string {
@@ -21,7 +41,10 @@ export class GeminiService {
   }
 
   private buildFallbackOrder(preferred: string, available: string[]): string[] {
+    // Порядок по убыванию: сначала модели, у которых есть бесплатная квота
+    // (Gemini 2.0-* сейчас имеют free tier limit=0), затем остальные как запас.
     const preferredOrder = [
+      'gemini-2.5-flash-lite',
       'gemini-2.5-flash',
       'gemini-2.0-flash',
       'gemini-2.0-flash-lite'
@@ -64,47 +87,62 @@ export class GeminiService {
     );
   }
 
+  // Собирает читаемое сообщение об ошибке из axios-ошибки (status + тело ответа Google),
+  // чтобы isRetriableError видел '429'/'quota' и т.п.
+  private describeAxiosError(err: any): string {
+    const status = err?.response?.status;
+    const data = err?.response?.data;
+    const dataStr = data
+      ? (typeof data === 'string' ? data : JSON.stringify(data))
+      : '';
+    return `${status ?? ''} ${err?.message ?? ''} ${dataStr}`.trim();
+  }
+
   async getAvailableModels(): Promise<string[]> {
+    const defaults = ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.0-flash'];
     try {
-      const apiKey = this.configService.get<string>('GEMINI_API_KEY');
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
-      
-      if (!response.ok) {
-        throw new Error(`ListModels HTTP ${response.status}`);
-      }
-      
-      const json = await response.json();
-      const models = (json.models || [])
-        .filter(m => Array.isArray(m.supportedGenerationMethods) && 
+      // pageSize=1000 чтобы получить весь список за один запрос (по умолчанию ~50).
+      const resp = await this.http.get(`${this.baseUrl}/models`, {
+        params: { pageSize: 1000, key: this.apiKey },
+      });
+
+      const models = (resp.data?.models || [])
+        .filter(m => Array.isArray(m.supportedGenerationMethods) &&
                     m.supportedGenerationMethods.includes('generateContent'))
         .map(m => m.name);
-      
+
+      if (models.length === 0) {
+        console.warn('ListModels returned an empty generateContent list, using defaults');
+        return defaults;
+      }
+
       return models;
     } catch (error) {
-      console.error('Error fetching Gemini models:', error);
-      // Возвращаем дефолтные модели если API недоступен
-      return ['gemini-2.5-flash', 'gemini-2.0-flash'];
+      // Логируем тело ответа — сразу видно причину (регион/квота/ключ).
+      console.error('Error fetching Gemini models:', this.describeAxiosError(error));
+      return defaults;
     }
   }
 
   private pickBestModel(modelsList: string[]): string {
     const names = modelsList.map(m => m);
     const preferredOrder = [
+      'gemini-2.5-flash-lite',
       'gemini-2.5-flash',
       'gemini-2.0-flash'
     ];
-    
+
     for (const pref of preferredOrder) {
       if (names.some(n => n === pref)) return pref;
       if (names.some(n => n.endsWith('/' + pref))) return pref;
     }
-    
+
     if (names.length > 0) {
       const first = names[0];
       return first.includes('/') ? first.split('/').pop() : first;
     }
-    
-    return 'gemini-2.5-flash';
+
+    return 'gemini-2.5-flash-lite';
   }
 
   async generateResponse(
@@ -132,26 +170,36 @@ export class GeminiService {
       let lastError: any = null;
       for (const candidate of candidates) {
         try {
-          const genModel = this.genAI.getGenerativeModel({ model: candidate });
-          const result = await genModel.generateContent(prompt);
-          const response = await result.response;
-          const text = response.text();
+          const resp = await this.http.post(
+            `${this.baseUrl}/models/${candidate}:generateContent`,
+            { contents: [{ role: 'user', parts: [{ text: prompt }] }] },
+            {
+              params: { key: this.apiKey },
+              headers: { 'Content-Type': 'application/json' },
+            }
+          );
+
+          const data = resp.data;
+          const text = (data?.candidates?.[0]?.content?.parts || [])
+            .map((p: any) => p?.text || '')
+            .join('');
+          const usage = data?.usageMetadata || {};
 
           return {
             content: text,
             stats: {
               model: candidate,
-              promptTokens: response.usageMetadata?.promptTokenCount || 0,
-              responseTokens: response.usageMetadata?.candidatesTokenCount || 0,
-              totalTokens: response.usageMetadata?.totalTokenCount || 0
+              promptTokens: usage.promptTokenCount || 0,
+              responseTokens: usage.candidatesTokenCount || 0,
+              totalTokens: usage.totalTokenCount || 0
             }
           };
         } catch (err) {
-          lastError = err;
-          const msg = String((err as any)?.message || err || '');
+          const msg = this.describeAxiosError(err);
+          lastError = new Error(msg);
           // Если ошибка не ретраибл и не 404/unknown model — прерываем цикл
           const isNotFound = msg.includes('404') || msg.toLowerCase().includes('not found');
-          if (!(isNotFound || this.isRetriableError(err))) {
+          if (!(isNotFound || this.isRetriableError(lastError))) {
             break;
           }
           // иначе идем к следующей модели
@@ -161,8 +209,8 @@ export class GeminiService {
 
       throw lastError || new Error('All models failed without specific error');
     } catch (error) {
-      console.error('Gemini API error:', error);
-      throw new InternalServerErrorException(`Ошибка Gemini API: ${error.message}`);
+      console.error('Gemini API error:', error?.message || error);
+      throw new InternalServerErrorException(`Ошибка Gemini API: ${error?.message || error}`);
     }
   }
 }
