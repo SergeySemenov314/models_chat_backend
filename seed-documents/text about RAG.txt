@@ -1,0 +1,23 @@
+This is a test document for checking the RAG system.
+
+This document contains information about testing the Retrieval-Augmented Generation system.
+
+The RAG system allows finding relevant information from uploaded documents and using it to answer user questions.
+
+Main system components:
+1. Text extraction from documents
+2. Chunking
+3. Embedding generation
+4. Vector search
+5. Integration of found information into model responses
+
+The system supports formats: PDF, DOCX, TXT.
+
+For testing, use the useRag: true flag in the API request.
+
+Testing information:
+- The test file should be indexed after upload
+- When requesting with useRag, the system should find relevant parts of the document
+- The response should contain information from the uploaded document
+
+

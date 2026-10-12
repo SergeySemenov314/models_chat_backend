@@ -1,7 +1,6 @@
 import { Injectable, InternalServerErrorException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios, { AxiosInstance } from 'axios';
-import { HttpsProxyAgent } from 'https-proxy-agent';
 import { MessageDto, ChatResponseDto } from '../dto/chat-message.dto';
 
 @Injectable()
@@ -17,22 +16,7 @@ export class GeminiService {
     }
     this.apiKey = apiKey;
 
-    // Если задан GEMINI_PROXY_URL — все вызовы к Google идут через прокси
-    // (нужно, когда сервер в регионе, где Google блокирует Gemini, напр. EEA).
-    // Через прокси идут ТОЛЬКО запросы этого клиента — ChromaDB/HuggingFace не затрагиваются.
-    const proxyUrl = this.configService.get<string>('GEMINI_PROXY_URL');
-    const axiosConfig: any = { timeout: 60000 };
-    if (proxyUrl && proxyUrl.trim()) {
-      const url = proxyUrl.trim();
-      axiosConfig.httpsAgent = new HttpsProxyAgent(url);
-      axiosConfig.proxy = false; // отключаем встроенный proxy axios, используем agent
-      try {
-        console.log(`Gemini: outbound requests routed via proxy ${new URL(url).host}`);
-      } catch {
-        console.log('Gemini: outbound requests routed via proxy');
-      }
-    }
-    this.http = axios.create(axiosConfig);
+    this.http = axios.create({ timeout: 60000, proxy: false });
   }
 
   private toFlatName(name: string): string {
@@ -40,7 +24,7 @@ export class GeminiService {
     return name.includes('/') ? name.split('/').pop() as string : name;
   }
 
-  private buildFallbackOrder(preferred: string, available: string[]): string[] {
+  private buildFallbackOrder(preferred: string | undefined, available: string[]): string[] {
     // Порядок по убыванию: сначала модели, у которых есть бесплатная квота
     // (Gemini 2.0-* сейчас имеют free tier limit=0), затем остальные как запас.
     const preferredOrder = [
@@ -53,7 +37,7 @@ export class GeminiService {
     const flatAvailable = (available || []).map(n => this.toFlatName(n));
 
     const ordered = [
-      this.toFlatName(preferred),
+      this.toFlatName(preferred || ''),
       ...preferredOrder,
       ...flatAvailable
     ];
@@ -159,7 +143,7 @@ export class GeminiService {
   }
 
   async generateResponse(
-    model: string,
+    model: string | undefined,
     messages: MessageDto[],
     systemPrompt?: string
   ): Promise<ChatResponseDto> {
@@ -168,24 +152,32 @@ export class GeminiService {
       const availableModels = await this.getAvailableModels();
       const candidates = this.buildFallbackOrder(model, availableModels);
 
-      // Готовим промпт один раз
-      let prompt = '';
-      if (systemPrompt && systemPrompt.trim()) {
-        prompt += `Системная инструкция: ${systemPrompt}\n\n`;
-      }
+      const instruction = [
+        'Always answer in English, regardless of the language used in the question.',
+        'Give only the final answer. Do not show a plan, internal reasoning, a restatement of the question, or sections such as Question, Constraint, Topic, or Introduction.',
+        'Give a complete, useful answer at a level appropriate to the question. When the documents contain enough relevant detail, normally write a substantial answer of about 100 to 180 words unless the user explicitly asks for brevity. Start with the direct answer, then explain the context and any important distinctions in the source.',
+        'For a list of components, explain the role of each component in one or two sentences and briefly describe how they work together. For a factual question, do not stop after one sentence when the source describes multiple relevant interpretations, milestones, or examples. Avoid filler.',
+        'Use plain-text paragraphs or simple numbered lines. Do not use Markdown markers, asterisks, headings, or LaTeX.',
+        'When relevant document excerpts are supplied, use them as the primary source. Expand terse lists with accurate explanations of standard concepts, but do not invent specific facts or cite chunk numbers; the application displays document sources separately.',
+        systemPrompt?.trim() || '',
+      ].filter(Boolean).join('\n\n');
+
+      // Передаем историю как сообщения, а инструкции и контекст документов — отдельно.
       const recentMessages = messages.slice(-10).filter(msg => msg.role !== 'error');
-      recentMessages.forEach(msg => {
-        const roleLabel = msg.role === 'assistant' ? 'AI' : 'Пользователь';
-        prompt += `${roleLabel}: ${msg.content}\n`;
-      });
-      prompt += `AI: `;
+      const contents = recentMessages.map(msg => ({
+        role: msg.role === 'assistant' ? 'model' : 'user',
+        parts: [{ text: msg.content }],
+      }));
 
       let lastError: any = null;
       for (const candidate of candidates) {
         try {
           const resp = await this.http.post(
             `${this.baseUrl}/models/${candidate}:generateContent`,
-            { contents: [{ role: 'user', parts: [{ text: prompt }] }] },
+            {
+              systemInstruction: { parts: [{ text: instruction }] },
+              contents,
+            },
             {
               params: { key: this.apiKey },
               headers: { 'Content-Type': 'application/json' },

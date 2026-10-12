@@ -56,10 +56,15 @@ export class DocumentProcessorService {
       // Динамический импорт для избежания проблем с загрузкой модуля при старте приложения
       // Используем require динамически, чтобы модуль загружался только при необходимости
       // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const pdfParse = require('pdf-parse');
+      const { PDFParse } = require('pdf-parse');
       const dataBuffer = fs.readFileSync(filePath);
-      const data = await pdfParse(dataBuffer);
-      return data.text;
+      const parser = new PDFParse({ data: dataBuffer });
+      try {
+        const data = await parser.getText();
+        return data.text;
+      } finally {
+        await parser.destroy();
+      }
     } catch (error) {
       this.logger.error(`Error parsing PDF file ${filePath}:`, error);
       throw new Error(`Failed to extract text from PDF: ${error.message}`);

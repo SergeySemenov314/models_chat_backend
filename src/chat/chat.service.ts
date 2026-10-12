@@ -15,14 +15,14 @@ export class ChatService {
   ) {}
 
   async sendMessage(chatRequest: ChatRequestDto): Promise<ChatResponseDto> {
-    const { provider, model, messages, systemPrompt, useRag } = chatRequest;
+    const { model, messages } = chatRequest;
 
-    let enhancedSystemPrompt = systemPrompt || '';
+    let enhancedSystemPrompt = '';
     let sources: Array<{ document: string; similarity: number }> = [];
+    let fileSearchWarning: string | undefined;
 
-    // Если включен RAG, ищем релевантные документы
-    if (useRag && this.ragService.isEnabled()) {
-      this.logger.log(`RAG requested: useRag=${useRag}, RAG enabled=${this.ragService.isEnabled()}`);
+    // Поиск по файлам (RAG) выполняется всегда, если сервис включен
+    if (this.ragService.isEnabled()) {
       try {
         // Берем последнее сообщение пользователя для поиска
         const lastUserMessage = messages
@@ -64,25 +64,22 @@ export class ChatService {
       } catch (error) {
         this.logger.error('Error during RAG search:', error);
         this.logger.error(error.stack);
-        // Продолжаем без RAG если произошла ошибка
+        fileSearchWarning = 'Поиск по файлам недоступен. Ответ получен без содержимого загруженных документов.';
       }
-    } else if (useRag && !this.ragService.isEnabled()) {
-      this.logger.warn('RAG requested but is disabled. Set RAG_ENABLED=true in environment variables.');
-    }
-
-    let response: ChatResponseDto;
-
-    if (provider === 'gemini') {
-      response = await this.geminiService.generateResponse(model, messages, enhancedSystemPrompt);
-    } else if (provider === 'custom') {
-      response = await this.customService.generateResponse(model, messages, enhancedSystemPrompt);
     } else {
-      throw new Error(`Unsupported provider: ${provider}`);
+      this.logger.warn('RAG is disabled. Set RAG_ENABLED=true in environment variables.');
+      fileSearchWarning = 'Поиск по файлам отключён на сервере. Ответ получен без содержимого документов.';
     }
+
+    // На бэке всегда используется Gemini
+    const response = await this.geminiService.generateResponse(model, messages, enhancedSystemPrompt);
 
     // Добавляем источники в ответ, если они есть
     if (sources.length > 0) {
       response.sources = sources;
+    }
+    if (fileSearchWarning) {
+      response.fileSearchWarning = fileSearchWarning;
     }
 
     return response;

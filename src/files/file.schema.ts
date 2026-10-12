@@ -20,6 +20,18 @@ export class FileDocument extends Document {
 
   @Prop({ default: Date.now })
   uploadedAt: Date;
+
+  @Prop()
+  indexStatus?: 'pending' | 'ready' | 'failed' | 'unsupported' | 'disabled';
+
+  @Prop({ default: false })
+  isPreloaded?: boolean;
+
+  @Prop()
+  seedKey?: string;
+
+  @Prop()
+  seedChecksum?: string;
 }
 
 export const FileSchema = SchemaFactory.createForClass(FileDocument);

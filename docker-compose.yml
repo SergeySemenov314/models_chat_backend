@@ -41,8 +41,11 @@ services:
       - NODE_ENV=production
       - CHROMADB_HOST=chromadb-server
       - CHROMADB_PORT=8000
+      - EMBEDDING_PROVIDER=gemini
     env_file:
       - .env
+    volumes:
+      - ./uploads:/app/uploads
     command: ["npm", "run", "start:prod"]
     depends_on:
       mongodb:

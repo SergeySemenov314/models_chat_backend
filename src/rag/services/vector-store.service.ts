@@ -16,9 +16,14 @@ export class VectorStoreService implements OnModuleInit {
   private readonly logger = new Logger(VectorStoreService.name);
   private client: ChromaClient;
   private collection: any;
-  private readonly collectionName = 'documents';
+  private readonly collectionName: string;
 
-  constructor(private configService: ConfigService) {}
+  constructor(private configService: ConfigService) {
+    // Новая модель эмбеддингов несовместима со старыми векторами в documents.
+    this.collectionName = (this.configService.get<string>('EMBEDDING_PROVIDER') || 'gemini') === 'gemini'
+      ? 'documents_gemini_embedding_001'
+      : 'documents';
+  }
 
   async onModuleInit() {
     await this.initialize();
@@ -141,8 +146,7 @@ export class VectorStoreService implements OnModuleInit {
       }
 
       if (!this.collection) {
-        this.logger.warn('ChromaDB collection is not initialized, returning empty results');
-        return [];
+        throw new Error('ChromaDB collection is not initialized');
       }
 
       const where: any = {};
@@ -180,8 +184,7 @@ export class VectorStoreService implements OnModuleInit {
     } catch (error) {
       this.logger.error('Error searching similar documents:', error);
       this.logger.error(error.stack);
-      // Возвращаем пустой массив вместо выбрасывания ошибки
-      return [];
+      throw error;
     }
   }
 

@@ -12,26 +12,14 @@ export class MessageDto {
 }
 
 export class ChatRequestDto {
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  provider: 'gemini' | 'custom';
-
-  @IsString()
-  @IsNotEmpty()
-  model: string;
+  model?: string;
 
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => MessageDto)
   messages: MessageDto[];
-
-  @IsOptional()
-  @IsString()
-  systemPrompt?: string;
-
-  @IsOptional()
-  @IsBoolean()
-  useRag?: boolean;
 }
 
 export class ChatResponseDto {
@@ -51,6 +39,10 @@ export class ChatResponseDto {
     document: string;
     similarity: number;
   }>;
+
+  @IsOptional()
+  @IsString()
+  fileSearchWarning?: string;
 }
 
 export class ModelsListDto {

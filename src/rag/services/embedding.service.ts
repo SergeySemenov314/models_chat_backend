@@ -12,6 +12,13 @@ export class EmbeddingService {
   private readonly huggingFaceApiKey: string | null;
   private readonly huggingFaceModel: string;
 
+  private describeEmbeddingError(error: unknown): string {
+    if (axios.isAxiosError(error)) {
+      return `${this.provider} embedding request failed (HTTP ${error.response?.status ?? 'no response'}${error.code ? `, ${error.code}` : ''})`;
+    }
+    return error instanceof Error ? error.message : 'Unknown embedding error';
+  }
+
   constructor(private configService: ConfigService) {
     this.provider = this.configService.get<string>('EMBEDDING_PROVIDER') || 'gemini';
     this.huggingFaceApiKey = null;
@@ -22,7 +29,7 @@ export class EmbeddingService {
       if (apiKey) {
         this.geminiAI = new GoogleGenerativeAI(apiKey);
       } else {
-        this.logger.warn('GEMINI_API_KEY not found, embeddings will use fallback');
+        this.logger.warn('GEMINI_API_KEY not found, Gemini embeddings are unavailable');
         this.geminiAI = null;
       }
     } else if (this.provider === 'openai') {
@@ -59,9 +66,9 @@ export class EmbeddingService {
         throw new Error(`Unsupported embedding provider: ${this.provider}`);
       }
     } catch (error) {
-      this.logger.error(`Error generating embedding:`, error);
-      this.logger.error(error.stack);
-      throw error;
+      const message = this.describeEmbeddingError(error);
+      this.logger.error(message);
+      throw new Error(message);
     }
   }
 
@@ -90,8 +97,9 @@ export class EmbeddingService {
         throw new Error(`Unsupported embedding provider: ${this.provider}`);
       }
     } catch (error) {
-      this.logger.error(`Error generating embeddings:`, error);
-      throw error;
+      const message = this.describeEmbeddingError(error);
+      this.logger.error(message);
+      throw new Error(message);
     }
   }
 
@@ -104,24 +112,23 @@ export class EmbeddingService {
     }
 
     try {
-      // Gemini использует embedding-001 модель для эмбеддингов
-      const model = this.geminiAI.getGenerativeModel({ model: 'embedding-001' });
-      
-      // Для Gemini нужно использовать специальный метод для эмбеддингов
-      // Если в API нет прямого метода, используем альтернативный подход
       const apiKey = this.configService.get<string>('GEMINI_API_KEY');
       const response = await axios.post(
-        `https://generativelanguage.googleapis.com/v1beta/models/embedding-001:embedContent?key=${apiKey}`,
+        'https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent',
         {
-          model: 'models/embedding-001',
+          model: 'models/gemini-embedding-001',
           content: {
             parts: [{ text: text }]
-          }
+          },
+          outputDimensionality: 384,
         },
         {
           headers: {
-            'Content-Type': 'application/json'
-          }
+            'Content-Type': 'application/json',
+            'x-goog-api-key': apiKey,
+          },
+          timeout: 30000,
+          proxy: false,
         }
       );
 
@@ -132,10 +139,7 @@ export class EmbeddingService {
 
       return embedding;
     } catch (error) {
-      this.logger.error('Gemini embedding error:', error);
-      // Fallback: используем простой эмбеддинг на основе текста
-      // В продакшене лучше использовать OpenAI или другой провайдер
-      return this.fallbackEmbedding(text);
+      throw error;
     }
   }
 
@@ -171,7 +175,6 @@ export class EmbeddingService {
 
       return embedding;
     } catch (error) {
-      this.logger.error('OpenAI embedding error:', error);
       throw error;
     }
   }
@@ -208,7 +211,6 @@ export class EmbeddingService {
 
       return embeddings;
     } catch (error) {
-      this.logger.error('OpenAI embeddings error:', error);
       throw error;
     }
   }
@@ -282,11 +284,8 @@ export class EmbeddingService {
           this.logger.error('Hugging Face API requires authentication. Please set HUGGINGFACE_API_KEY in your .env file.');
         }
         this.logger.error(`Hugging Face API error: ${error.response?.status} - ${error.response?.statusText}`);
-        if (error.response?.data) {
-          this.logger.error(`Error details: ${JSON.stringify(error.response.data)}`);
-        }
       } else {
-        this.logger.error('Hugging Face embedding error:', error);
+        this.logger.error(this.describeEmbeddingError(error));
       }
       throw error;
     }
@@ -365,45 +364,12 @@ export class EmbeddingService {
           this.logger.error('Hugging Face API requires authentication. Please set HUGGINGFACE_API_KEY in your .env file.');
         }
         this.logger.error(`Hugging Face API error: ${error.response?.status} - ${error.response?.statusText}`);
-        if (error.response?.data) {
-          this.logger.error(`Error details: ${JSON.stringify(error.response.data)}`);
-        }
       } else {
-        this.logger.error('Hugging Face embeddings error:', error);
+        this.logger.error(this.describeEmbeddingError(error));
       }
       throw error;
     }
   }
 
-  /**
-   * Простой fallback эмбеддинг (для тестирования или когда API недоступен)
-   * В реальном приложении лучше использовать локальную модель или другой провайдер
-   */
-  private fallbackEmbedding(text: string): number[] {
-    // Простой TF-IDF подобный эмбеддинг на основе хеша
-    // Это не настоящий эмбеддинг, но для тестирования сойдет
-    const words = text.toLowerCase().split(/\s+/);
-    const embedding = new Array(384).fill(0);
-    
-    words.forEach((word, i) => {
-      const hash = this.simpleHash(word);
-      const index = hash % 384;
-      embedding[index] += 1 / (words.length || 1);
-    });
-
-    // Нормализация
-    const magnitude = Math.sqrt(embedding.reduce((sum, val) => sum + val * val, 0));
-    return embedding.map(val => magnitude > 0 ? val / magnitude : 0);
-  }
-
-  private simpleHash(str: string): number {
-    let hash = 0;
-    for (let i = 0; i < str.length; i++) {
-      const char = str.charCodeAt(i);
-      hash = ((hash << 5) - hash) + char;
-      hash = hash & hash; // Convert to 32bit integer
-    }
-    return Math.abs(hash);
-  }
 }
 

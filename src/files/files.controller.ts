@@ -8,6 +8,7 @@ import {
   UploadedFile,
   Body,
   BadRequestException,
+  NotFoundException,
   Res,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -87,6 +88,9 @@ export class FilesController {
         size: savedFile.size,
         formattedSize: this.filesService.formatFileSize(savedFile.size),
         uploadedAt: savedFile.uploadedAt,
+        available: fs.existsSync(savedFile.path),
+        indexStatus: savedFile.indexStatus,
+        isPreloaded: savedFile.isPreloaded || false,
       },
     };
   }
@@ -105,6 +109,9 @@ export class FilesController {
         size: file.size,
         formattedSize: this.filesService.formatFileSize(file.size),
         uploadedAt: file.uploadedAt,
+        available: fs.existsSync(file.path),
+        indexStatus: fs.existsSync(file.path) ? (file.indexStatus || 'unknown') : 'missing',
+        isPreloaded: file.isPreloaded || false,
       })),
       stats: {
         totalFiles: stats.totalFiles,
@@ -118,14 +125,15 @@ export class FilesController {
     const file = await this.filesService.getFileById(id);
     
     if (!fs.existsSync(file.path)) {
-      throw new BadRequestException('Физический файл не найден');
+      throw new NotFoundException('Файл отсутствует на сервере. Загрузите его повторно.');
     }
+    res.download(file.path, file.originalName);
+  }
 
-    res.setHeader('Content-Disposition', `attachment; filename="${file.originalName}"`);
-    res.setHeader('Content-Type', file.mimetype);
-    
-    const fileStream = fs.createReadStream(file.path);
-    fileStream.pipe(res);
+  @Post(':id/reindex')
+  async reindexFile(@Param('id') id: string) {
+    const file = await this.filesService.reindexFile(id);
+    return { id: file._id, indexStatus: file.indexStatus };
   }
 
   @Delete(':id')
